@@ -1,0 +1,6 @@
+venv/
+*.pyc
+site-packages/
+node_modules/
+.vscode/
+.serverless/

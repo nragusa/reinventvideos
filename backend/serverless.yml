@@ -1,0 +1,166 @@
+# Serverless configuraiton file for the reinvent videos
+# application. This app iterates over various youtube
+# playlists that contain breakout sessions from re:Invent
+# years, then uploads the latest data about the videos
+# into Algolia indicies. A web frontend then displays
+# info from the Algolia engine so users can search.
+
+service: reinventvideos-vue
+
+provider:
+  name: aws
+  runtime: python3.6
+  stage: ${opt:stage, 'dev'}
+  region: us-east-2
+  environment:
+    PODCAST_TABLE: !Ref PodcastTable
+  tags:
+    Environment: ${self:provider.stage}
+    Project: reinventvideos.com
+
+custom:
+  # Need to statically set S3 bucket name for S3 event trigger. Boo.
+  s3WebsiteBucketName: reinventvideos-web-${self:provider.stage}
+
+package:
+  individually: true 
+  exclude:
+    - '*/**'
+
+functions:
+  update-youtube-stats:
+    description: Gets AWS re:Invent video info from YouTube and adds stats into Algolia indexes
+    handler: stats.main
+    memorySize: 512
+    timeout: 300
+    role: !GetAtt YoutubeLambdaRole.Arn
+    environment:
+      YOUTUBE_DEVELOPER_KEY: ${ssm:/sls/${self:provider.stage}/${self:service}/youtube.apikey~true}
+      ALGOLIA_DEVELOPER_KEY: ${ssm:/sls/${self:provider.stage}/${self:service}/algolia.apikey~true}
+      ALGOLIA_APP: ${ssm:/sls/${self:provider.stage}/${self:service}/algolia.app~true}
+      ALGOLIA_INDICIES: ${ssm:/sls/${self:provider.stage}/${self:service}/algolia.indexes~true}
+    package:
+      include:
+        - stats.py
+        - site-packages/**
+    events:
+      - schedule: 
+          rate: cron(20 7 * * ? *)
+          enabled: true
+  update-podcast-table:
+    description: When a new podcast is added to S3, stores an entry in DynamoDB so it can be added to Algolia later
+    handler: podcasts.main
+    memorySize: 128
+    timeout: 300
+    role: !GetAtt PodcastLambdaRole.Arn
+    package:
+      include:
+        - podcasts.py
+    events:
+      - s3: 
+          bucket: ${self:custom.s3WebsiteBucketName}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: podcasts/
+
+resources:
+  Resources:
+    PodcastTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: session
+            AttributeType: S
+          - AttributeName: year
+            AttributeType: S
+        KeySchema:
+          - AttributeName: session
+            KeyType: HASH
+          - AttributeName: year
+            KeyType: RANGE
+        ProvisionedThroughput: 
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+          - Key: Project
+            Value: reinventvideos.com
+    YoutubeLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+            - sts:AssumeRole
+        Path: "/"
+        Policies:
+        - PolicyName: Logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource:
+                - 'Fn::Join':
+                  - ':'
+                  -
+                    - 'arn:aws:logs'
+                    - Ref: 'AWS::Region'
+                    - Ref: 'AWS::AccountId'
+                    - 'log-group:/aws/lambda/*:*:*'
+        - PolicyName: DynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - dynamodb:Query
+              Resource: !GetAtt PodcastTable.Arn
+    PodcastLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+            - sts:AssumeRole
+        Path: "/"
+        Policies:
+        - PolicyName: Logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource:
+                - 'Fn::Join':
+                  - ':'
+                  -
+                    - 'arn:aws:logs'
+                    - Ref: 'AWS::Region'
+                    - Ref: 'AWS::AccountId'
+                    - 'log-group:/aws/lambda/*:*:*'
+        - PolicyName: DynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - dynamodb:PutItem
+              Resource: !GetAtt PodcastTable.Arn
