@@ -1,6 +1,6 @@
 algoliasearch==1.18.1
 cachetools==3.0.0
-certifi==2018.11.29
+certifi==2022.12.7
 chardet==3.0.4
 google-api-python-client==1.7.5
 google-auth==1.6.1
